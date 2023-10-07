@@ -1,83 +1,114 @@
-use std::fs;
-
 use glam::DVec3;
-use indicatif::ProgressIterator;
-use itertools::Itertools;
 
-use raytracing::ray::Ray;
+use raytracing::camera::Camera;
+use raytracing::material::Material;
 use raytracing::sphere::Sphere;
 
-const MAX_VALUE: u8 = 255;
-const ASPECT_RATIO: f64 = 16.0 / 9.0;
-const IMAGE_WIDTH: u32 = 400;
-const IMAGE_HEIGHT: u32 = {
-    let height = IMAGE_WIDTH as f64 / ASPECT_RATIO;
-    if height < 1.0 {
-        1
-    } else {
-        height as _
-    }
-};
+use rand::{thread_rng, Rng};
 
-const FOCAL_LENGTH: f64 = 1.0;
-const VIEWPORT_HEIGHT: f64 = 2.0;
-const VIEWPORT_WIDTH: f64 = VIEWPORT_HEIGHT * (IMAGE_WIDTH as f64 / IMAGE_HEIGHT as f64);
-const VIEWPORT_V: DVec3 = DVec3::new(0.0, -VIEWPORT_HEIGHT, 0.0);
-const VIEWPORT_U: DVec3 = DVec3::new(VIEWPORT_WIDTH, 0.0, 0.0);
-const CAMERA_CENTER: DVec3 = DVec3::new(0.0, 0.0, 0.0);
+const ASPECT_RATIO: f64 = 16.0 / 9.0;
+const IMAGE_WIDTH: u32 = 1200;
+const SAMPLES_PER_PIXEL: u32 = 500;
+const VFOV: f64 = 20.0;
 
 fn main() {
-    let pixel_delta_u = VIEWPORT_U / IMAGE_WIDTH as f64;
-    let pixel_delta_v = VIEWPORT_V / IMAGE_HEIGHT as f64;
+    let mut world = vec![];
 
-    let viewport_upper_left =
-        CAMERA_CENTER - DVec3::new(0.0, 0.0, FOCAL_LENGTH) - VIEWPORT_U / 2.0 - VIEWPORT_V / 2.0;
+    let ground_material = Material::Lambertian {
+        albedo: DVec3::splat(0.5),
+    };
+    world.push(Sphere {
+        center: DVec3::new(0., -1000., 0.),
+        radius: 1000.,
+        material: ground_material,
+    });
 
-    let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_v + pixel_delta_u);
+    let mut rng = thread_rng();
+    for a in -11..11 {
+        for b in -11..11 {
+            let choose_mat = rng.gen::<f64>();
+            let center = DVec3::new(
+                a as f64 + 0.9 * rng.gen::<f64>(),
+                0.2,
+                b as f64 + 0.9 * rng.gen::<f64>(),
+            );
 
-    // World
-    let world = vec![
-        Sphere {
-            center: DVec3::new(0.0, 0.0, -1.0),
-            radius: 0.5,
-        },
-        Sphere {
-            center: DVec3::new(0.0, -100.5, -1.0),
-            radius: 100.0,
-        },
-    ];
+            if (center - DVec3::new(4., 0.2, 0.)).length() > 0.9 {
+                let material = if choose_mat < 0.8 {
+                    // diffuse
+                    let albedo = DVec3::new(
+                        rng.gen_range(0f64..1.),
+                        rng.gen_range(0f64..1.),
+                        rng.gen_range(0f64..1.),
+                    ) * DVec3::new(
+                        rng.gen_range(0f64..1.),
+                        rng.gen_range(0f64..1.),
+                        rng.gen_range(0f64..1.),
+                    );
+                    Material::Lambertian {
+                        albedo: albedo.into(),
+                    }
+                } else if choose_mat < 0.95 {
+                    // metal
+                    let albedo = DVec3::new(
+                        rng.gen_range(0.5..1.),
+                        rng.gen_range(0.5..1.),
+                        rng.gen_range(0.5..1.),
+                    );
+                    let fuzz = rng.gen_range(0f64..0.5);
 
-    let pixels = (0..IMAGE_HEIGHT)
-        .cartesian_product(0..IMAGE_WIDTH)
-        .progress_count(IMAGE_HEIGHT as u64 * IMAGE_WIDTH as u64)
-        .map(|(y, x)| {
-            let pixel_center =
-                pixel00_loc + (y as f64 * pixel_delta_v) + (x as f64 * pixel_delta_u);
+                    Material::Metal { albedo, fuzz }
+                } else {
+                    // glass
+                    Material::Dielectric {
+                        refractive_index: 1.5,
+                    }
+                };
 
-            let ray_direction = pixel_center - CAMERA_CENTER;
-
-            (Ray::new(CAMERA_CENTER, ray_direction).ray_color(&world)).as_color_string()
-        })
-        .join("\n");
-
-    fs::write(
-        "output.ppm",
-        format!("P3 {IMAGE_WIDTH} {IMAGE_HEIGHT} {MAX_VALUE}\n{pixels}"),
-    )
-    .unwrap();
-}
-
-trait IntoColor {
-    fn as_color_string(&self) -> String;
-}
-
-impl IntoColor for DVec3 {
-    fn as_color_string(&self) -> String {
-        format!(
-            "{} {} {}",
-            (self.x * 255.0) as u8,
-            (self.y * 255.0) as u8,
-            (self.z * 255.0) as u8
-        )
+                world.push(Sphere {
+                    center,
+                    radius: 0.2,
+                    material,
+                });
+            }
+        }
     }
+
+    world.push(Sphere {
+        center: DVec3::new(0., 1., 0.),
+        radius: 1.0,
+        material: Material::Dielectric {
+            refractive_index: 1.5,
+        },
+    });
+
+    world.push(Sphere {
+        center: DVec3::new(-4., 1., 0.),
+        radius: 1.0,
+        material: Material::Lambertian {
+            albedo: DVec3::new(0.4, 0.2, 0.1).into(),
+        },
+    });
+
+    world.push(Sphere {
+        center: DVec3::new(4., 1., 0.),
+        radius: 1.0,
+        material: Material::Metal {
+            albedo: DVec3::new(0.7, 0.6, 0.5),
+            fuzz: 0.0,
+        },
+    });
+
+    let camera = Camera::new(
+        IMAGE_WIDTH,
+        ASPECT_RATIO,
+        SAMPLES_PER_PIXEL,
+        VFOV,
+        DVec3::new(13., 2., 3.),
+        DVec3::new(0., 0., 0.),
+        0.6,
+        10.0,
+    );
+
+    camera.render_to_file(&world, "output.ppm");
 }

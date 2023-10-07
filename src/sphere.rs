@@ -3,11 +3,13 @@ use std::ops::Range;
 use glam::DVec3;
 
 use crate::hittable::{Hittable, HitRecord};
+use crate::material::Material;
 use crate::ray::Ray;
 
 pub struct Sphere {
     pub center: DVec3,
     pub radius: f64,
+    pub material: Material,
 }
 
 impl Hittable for Sphere {
@@ -21,6 +23,7 @@ impl Hittable for Sphere {
         if discriminant < 0. {
             return None;
         }
+
         let sqrtd = discriminant.sqrt();
 
         // Find the nearest root that lies in the acceptable range.
@@ -36,7 +39,7 @@ impl Hittable for Sphere {
         let point = ray.at(t);
         let outward_normal = (point - self.center) / self.radius;
 
-        let rec = HitRecord::with_face_normal(point, t, &outward_normal, ray);
+        let rec = HitRecord::with_face_normal(point, t, &outward_normal, self.material.clone(), ray);
 
         Some(rec)
     }
